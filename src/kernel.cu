@@ -240,11 +240,11 @@ void Boids::copyBoidsToVBO(float *vbodptr_positions, float *vbodptr_velocities) 
 * in the `pos` and `vel` arrays.
 */
 __device__ glm::vec3 computeVelocityChange(int N, int iSelf, const glm::vec3 *pos, const glm::vec3 *vel) {
-  glm::vec3 center = glm::vec3(0.0f, 0.0f, 0.0f);
-  int N1 = 0;
+  glm::vec3 center = pos[iSelf];
+  float N1 = 1.f;
   glm::vec3 c = glm::vec3(0.0f, 0.0f, 0.0f);
   glm::vec3 velocity = glm::vec3(0.0f, 0.0f, 0.0f);
-  int N3 = 0;
+  float N3 = 0.f;
   for (int i = 0; i < N; i++)
   {
       if (i == iSelf) continue;
@@ -266,7 +266,7 @@ __device__ glm::vec3 computeVelocityChange(int N, int iSelf, const glm::vec3 *po
   // Rule 1: boids fly towards their local perceived center of mass, which excludes themselves
   if (N1 > 0)
   {
-      center /= (N1 - 1);
+      center /= N1;
       sumVel += (center - pos[iSelf]) * rule1Scale;
   }
 
@@ -276,7 +276,7 @@ __device__ glm::vec3 computeVelocityChange(int N, int iSelf, const glm::vec3 *po
   // Rule 3: boids try to match the speed of surrounding boids
   if (N3 > 0)
   {
-      velocity /= (N3 - 1);
+      velocity /= N3;
       sumVel += velocity * rule3Scale;
   }
 
@@ -298,8 +298,10 @@ __global__ void kernUpdateVelocityBruteForce(int N, glm::vec3 *pos,
 
   // Clamp the speed
   float speed = glm::length(newVel);
-  float factor = imin(speed, maxSpeed) / speed;
-  newVel *= factor;
+  if (speed > maxSpeed)
+  {
+      newVel = glm::normalize(newVel) * maxSpeed;
+  }
 
   // Record the new velocity into vel2. Question: why NOT vel1?
   vel2[index] = newVel;
@@ -421,11 +423,11 @@ __global__ void kernUpdateVelNeighborSearchScattered(
       return;
   }
 
-  glm::vec3 center = glm::vec3(0.0f, 0.0f, 0.0f);
-  int N1 = 0;
+  glm::vec3 center = pos[index];
+  float N1 = 1.f;
   glm::vec3 c = glm::vec3(0.0f, 0.0f, 0.0f);
   glm::vec3 velocity = glm::vec3(0.0f, 0.0f, 0.0f);
-  int N3 = 0;
+  float N3 = 0.f;
 
   // - Identify the grid cell that this particle is in
   glm::vec3 gridLoc = (pos[index] - gridMin)*inverseCellWidth;
@@ -435,7 +437,7 @@ __global__ void kernUpdateVelNeighborSearchScattered(
   glm::vec3 gridIdx = glm::floor(gridLoc);
 
   // - Identify which cells may contain neighbors. This isn't always 8.
-  glm::vec3 midCellPos = (gridLoc + glm::vec3(0.5)) * cellWidth; // location of center of grid cell this boid is in
+  glm::vec3 midCellPos = (gridIdx + glm::vec3(0.5)) * cellWidth; // location of center of grid cell this boid is in
   glm::vec3 sign = glm::sign(gridLoc - midCellPos); // vector of signs representing whether the boid is in the first or sencond half of the cell wrt the three dims
 
   for (int z = 0; z <= 1; z++) {
@@ -444,9 +446,7 @@ __global__ void kernUpdateVelNeighborSearchScattered(
               glm::vec3 cellToCheck = gridIdx + glm::vec3(x, y, z) * sign;
               if (cellToCheck[0] < 0 || cellToCheck[0] >= gridResolution ||
                   cellToCheck[1] < 0 || cellToCheck[1] >= gridResolution ||
-                  cellToCheck[2] < 0 || cellToCheck[2] >= gridResolution) {
-                  continue;
-              }
+                  cellToCheck[2] < 0 || cellToCheck[2] >= gridResolution) continue;
               // - For each cell, read the start/end indices in the boid pointer array.
               // - Access each boid in the cell and compute velocity change from
               //   the boids rules, if this boid is within the neighborhood distance.
@@ -474,11 +474,11 @@ __global__ void kernUpdateVelNeighborSearchScattered(
       }
   }
 
-  glm::vec3 sumVel = glm::vec3(0.0f, 0.0f, 0.0f);
+  glm::vec3 sumVel = vel1[index];
 
   if (N1 > 0)
   {
-      center /= (N1 - 1);
+      center /= N1;
       sumVel += (center - pos[index]) * rule1Scale;
   }
 
@@ -486,14 +486,16 @@ __global__ void kernUpdateVelNeighborSearchScattered(
 
   if (N3 > 0)
   {
-      velocity /= (N3 - 1);
+      velocity /= N3;
       sumVel += velocity * rule3Scale;
   }
 
   // - Clamp the speed change before putting the new speed in vel2
   float speed = glm::length(sumVel);
-  float factor = imin(speed, maxSpeed) / speed;
-  sumVel *= factor;
+  if (speed > maxSpeed)
+  {
+      sumVel = glm::normalize(sumVel) * maxSpeed;
+  }
 
   vel2[index] = sumVel;
 }
